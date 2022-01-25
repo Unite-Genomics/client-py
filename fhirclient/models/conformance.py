@@ -247,7 +247,7 @@ class ConformanceImplementation(backboneelement.BackboneElement):
     def elementProperties(self):
         js = super(ConformanceImplementation, self).elementProperties()
         js.extend([
-            ("description", "description", str, False, None, True),
+            ("description", "description", str, False, None, False),
             ("url", "url", str, False, None, False),
         ])
         return js
