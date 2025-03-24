@@ -51,17 +51,14 @@ class FHIRClient(object):
         self.patient_id = None
         self._patient = None
 
-        self.client_id = None
-        self.private_key = None
-        self.public_key = None
-
         self.jwt_token = None
         """ If present, is included as part of the request to authenticate
         with a backend system through a client_assertion parameter
         """
 
         if save_func is None:
-            raise Exception("Must supply a save_func when initializing the SMART client")
+            raise Exception(
+                "Must supply a save_func when initializing the SMART client")
         self._save_func = save_func
 
         # init from state
@@ -73,7 +70,8 @@ class FHIRClient(object):
             if not 'app_id' in settings:
                 raise Exception("Must provide 'app_id' in settings dictionary")
             if not 'api_base' in settings:
-                raise Exception("Must provide 'api_base' in settings dictionary")
+                raise Exception(
+                    "Must provide 'api_base' in settings dictionary")
 
             self.app_id = settings['app_id']
             self.app_secret = settings.get('app_secret')
@@ -81,15 +79,11 @@ class FHIRClient(object):
             self.patient_id = settings.get('patient_id')
             self.scope = settings.get('scope', self.scope)
             self.launch_token = settings.get('launch_token')
-
-            self.client_id = settings.get('client_id')
-            self.private_key = settings.get('private_key')
-            self.public_key = settings.get('public_key')
-
             self.jwt_token = settings.get('jwt_token', None)
             self.server = FHIRServer(self, base_uri=settings['api_base'])
         else:
-            raise Exception("Must either supply settings or a state upon client initialization")
+            raise Exception(
+                "Must either supply settings or a state upon client initialization")
 
     # MARK: Authorization
 
@@ -140,7 +134,8 @@ class FHIRClient(object):
 
         :param str url: The complete callback URL
         """
-        ctx = self.server.handle_callback(url) if self.server is not None else None
+        ctx = self.server.handle_callback(
+            url) if self.server is not None else None
         self._handle_launch_context(ctx)
 
     def authorize(self):
@@ -165,7 +160,7 @@ class FHIRClient(object):
         logger.debug("SMART: Handling launch context: {0}".format(ctx))
         if 'patient' in ctx:
             # print('Patient id was {0}, row context is {1}'.format(self.patient_id, ctx))
-            self.patient_id = ctx['patient']  # TODO: TEST THIS!
+            self.patient_id = ctx['patient']        # TODO: TEST THIS!
         if 'id_token' in ctx:
             logger.warning("SMART: Received an id_token, ignoring")
         self.launch_context = ctx
@@ -178,7 +173,8 @@ class FHIRClient(object):
         if self._patient is None and self.patient_id is not None and self.ready:
             from fhirclient.models.patient import Patient
             try:
-                logger.debug("SMART: Attempting to read Patient {0}".format(self.patient_id))
+                logger.debug(
+                    "SMART: Attempting to read Patient {0}".format(self.patient_id))
                 self._patient = Patient.read(self.patient_id, self.server)
             except FHIRUnauthorizedException:
                 if self.reauthorize():
@@ -186,7 +182,8 @@ class FHIRClient(object):
                                  .format(self.patient_id))
                     self._patient = Patient.read(self.patient_id, self.server)
             except FHIRNotFoundException:
-                logger.warning("SMART: Patient with id {0} not found".format(self.patient_id))
+                logger.warning(
+                    "SMART: Patient with id {0} not found".format(self.patient_id))
                 self.patient_id = None
             self.save_state()
 
@@ -206,7 +203,7 @@ class FHIRClient(object):
             parts.append(human_name_instance.family)
         if human_name_instance.suffix and len(human_name_instance.suffix) > 0:
             if len(parts) > 0:
-                parts[len(parts) - 1] = parts[len(parts) - 1] + ','
+                parts[len(parts)-1] = parts[len(parts)-1]+','
             parts.extend(human_name_instance.suffix)
 
         return ' '.join(parts) if len(parts) > 0 else 'Unnamed'
@@ -242,7 +239,8 @@ class FHIRClient(object):
         self.redirect = state.get('redirect') or self.redirect
         self.patient_id = state.get('patient_id') or self.patient_id
         self.launch_token = state.get('launch_token') or self.launch_token
-        self.launch_context = state.get('launch_context') or self.launch_context
+        self.launch_context = state.get(
+            'launch_context') or self.launch_context
         self.server = FHIRServer(self, state=state.get('server'))
         self.jwt_token = state.get('jwt_token') or self.jwt_token
 
