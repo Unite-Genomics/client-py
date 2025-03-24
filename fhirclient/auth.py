@@ -149,6 +149,7 @@ class FHIROAuth2Auth(FHIRAuth):
         self.expires_at = None
         self.jwt_token = None
 
+        self.key_id = None
         self.client_id = None
         self.private_key = None
         self.public_key = None
@@ -310,10 +311,10 @@ class FHIROAuth2Auth(FHIRAuth):
             .format(self.access_token is not None, self.refresh_token is not None))
         return ret_params
     
-    def _request_access_token_with_client_id(self, server):
+    def _request_access_token_with_client_id(self, server, token_expiry_seconds=300):
         now_in_seconds = int(datetime.now(timezone.utc).timestamp())
 
-        future_time_expiry = 5 * 60
+        future_time_expiry = token_expiry_seconds
 
         claim = {
             'iss': self.client_id,
@@ -328,7 +329,7 @@ class FHIROAuth2Auth(FHIRAuth):
         jwt_headers = {
             "alg": "RS384",
             "typ": "JWT",
-            "kid": 'key_id',
+            "kid": self.key_id,
         }
 
         signed_jwt = jwt.encode(
@@ -428,6 +429,9 @@ class FHIROAuth2Auth(FHIRAuth):
         }
 
     def registration(self, server):
+        if self.public_key is None:
+            raise ValueError("Public key must be set before registration")
+
         public_key_pem = self.public_key.public_bytes(
             encoding=Encoding.PEM,
             format=PublicFormat.SubjectPublicKeyInfo,  # Standard format
@@ -444,7 +448,7 @@ class FHIROAuth2Auth(FHIRAuth):
             "jwks": {
                 "keys": [dict(
                     **public_key_jwk,
-                    kid='key_id'
+                    kid=self.key_id
                 )],
             },
         }
@@ -495,6 +499,7 @@ class FHIROAuth2Auth(FHIRAuth):
         self.refresh_token = state.get('refresh_token') or self.refresh_token
         self.jwt_token = state.get('jwt_token') or self.jwt_token
 
+        self.key_id = state.get('key_id') or self.key_id
         self.client_id = state.get('client_id') or self.client_id
         self.private_key = state.get('private_key') or self.private_key
         self.public_key = state.get('public_key') or self.public_key

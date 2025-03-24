@@ -4,7 +4,7 @@ requires-python = ">= 3.9"
 dependencies = [
     "requests >= 2.4",
     "pyjwt >= 2.10.1",
-    " cryptography >= 44.0.0"
+    "cryptography >= 44.0.0"
 ]
 authors = [{ name="SMART Platforms Team", email="support@smarthealthit.org" }]
 readme = "README.md"
