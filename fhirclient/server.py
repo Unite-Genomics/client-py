@@ -163,10 +163,7 @@ class FHIRServer(object):
         :throws: Exception on HTTP status >= 400
         :returns: Decoded JSON response
         """
-        headers = {
-            'Accept': 'application/json',
-            'Epic-Client-ID': self.client.app_id
-        }
+        headers = {'Accept': 'application/json'}
         res = self._get(path, headers, nosign)
         
         return res.json()
