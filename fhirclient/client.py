@@ -148,6 +148,10 @@ class FHIRClient(object):
         ctx = self.server.reauthorize() if self.server is not None else None
         self._handle_launch_context(ctx)
         return self.launch_context is not None
+
+    def registration(self):
+        ctx = self.server.registration() if self.server is not None else None
+        return ctx
     
     def _handle_launch_context(self, ctx):
         logger.debug("SMART: Handling launch context: {0}".format(ctx))

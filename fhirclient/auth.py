@@ -1,8 +1,13 @@
+import json
+import jwt
 import uuid
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import urllib.parse as urlparse
 from urllib.parse import urlencode
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives._serialization import Encoding, PublicFormat
+from jwt.algorithms import RSAAlgorithm
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +111,9 @@ class FHIRAuth(object):
         :returns: The launch context dictionary or None on failure
         """
         return None
-    
+
+    def registration(self, server):
+        return None
     
     # MARK: State
     
@@ -141,6 +148,11 @@ class FHIROAuth2Auth(FHIRAuth):
         self.refresh_token = None
         self.expires_at = None
         self.jwt_token = None
+
+        self.key_id = None
+        self.client_id = None
+        self.private_key = None
+        self.public_key = None
         
         super(FHIROAuth2Auth, self).__init__(state=state)
     
@@ -299,6 +311,63 @@ class FHIROAuth2Auth(FHIRAuth):
             .format(self.access_token is not None, self.refresh_token is not None))
         return ret_params
     
+    def _request_access_token_with_client_id(self, server, token_expiry_seconds=300):
+        now_in_seconds = int(datetime.now(timezone.utc).timestamp())
+
+        future_time_expiry = token_expiry_seconds
+
+        claim = {
+            'iss': self.client_id,
+            'sub': self.client_id,
+            "aud": self._token_uri,
+            'jti': str(uuid.uuid4()),
+            'exp': now_in_seconds + future_time_expiry,
+            'nbf': now_in_seconds,
+            'iat': now_in_seconds,
+        }
+
+        jwt_headers = {
+            "alg": "RS384",
+            "typ": "JWT",
+            "kid": self.key_id,
+        }
+
+        signed_jwt = jwt.encode(
+            headers=jwt_headers,
+            payload=claim,
+            key=self.private_key,
+            algorithm="RS384"
+        )
+
+        # Prepare the access token request
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        payload = {
+            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            "client_id": self.client_id,
+            "assertion": signed_jwt,
+        }
+
+        res = server.session.post(self._token_uri, headers=headers, data=payload)
+        server.raise_for_status(res)
+
+        ret_params = res.json()
+
+        self.access_token = ret_params.get('access_token')
+        if self.access_token is None:
+            raise Exception("No access token received")
+        del ret_params['access_token']
+
+        if 'expires_in' in ret_params:
+            expires_in = int(ret_params['expires_in'])
+            self.expires_at = datetime.now() + timedelta(seconds=expires_in)
+            del ret_params['expires_in']
+
+        logger.debug("SMART AUTH: Received access token: {0}".format(self.access_token is not None))
+
+        return ret_params
+
     
     # MARK: Authorization
 
@@ -335,13 +404,17 @@ class FHIROAuth2Auth(FHIRAuth):
         :param server: The Server instance to use
         :returns: The launch context dictionary, or None on failure
         """
-        if self.refresh_token is None:
-            logger.debug("SMART AUTH: Cannot reauthorize without refresh token")
-            return None
-        
-        logger.debug("SMART AUTH: Refreshing token")
-        reauth = self._reauthorize_params()
-        return self._request_access_token(server, reauth)
+        if self.refresh_token is not None:
+            logger.debug("SMART AUTH: Refreshing token using refresh token")
+            reauth = self._reauthorize_params()
+            return self._request_access_token(server, reauth)
+
+        if self.client_id is not None:
+            logger.debug("SMART AUTH: Refreshing token using dynamic client id")
+            return self._request_access_token_with_client_id(server)
+
+        logger.debug("SMART AUTH: Cannot reauthorize without refresh token")
+        return None
     
     def _reauthorize_params(self):
         """ Parameters to be used in a reauthorize request.
@@ -354,6 +427,39 @@ class FHIROAuth2Auth(FHIRAuth):
             'grant_type': 'refresh_token',
             'refresh_token': self.refresh_token,
         }
+
+    def registration(self, server):
+        if self.public_key is None:
+            raise ValueError("Public key must be set before registration")
+
+        public_key_pem = self.public_key.public_bytes(
+            encoding=Encoding.PEM,
+            format=PublicFormat.SubjectPublicKeyInfo,  # Standard format
+        )
+        alg = RSAAlgorithm(hashes.SHA384)
+        key = alg.prepare_key(public_key_pem)
+
+        # Export the public key in JWK format
+        public_key_jwk = json.loads(RSAAlgorithm.to_jwk(key))
+
+        # Prepare the registration request
+        request_body = {
+            "software_id": self.app_id,
+            "jwks": {
+                "keys": [dict(
+                    **public_key_jwk,
+                    kid=self.key_id
+                )],
+            },
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.access_token}",
+        }
+        res = server.session.post(self._registration_uri, headers=headers, json=request_body)
+        server.raise_for_status(res)
+        return res.json()
     
     
     # MARK: State
@@ -392,6 +498,11 @@ class FHIROAuth2Auth(FHIRAuth):
         self.access_token = state.get('access_token') or self.access_token
         self.refresh_token = state.get('refresh_token') or self.refresh_token
         self.jwt_token = state.get('jwt_token') or self.jwt_token
+
+        self.key_id = state.get('key_id') or self.key_id
+        self.client_id = state.get('client_id') or self.client_id
+        self.private_key = state.get('private_key') or self.private_key
+        self.public_key = state.get('public_key') or self.public_key
 
     # MARK: Utilities    
     

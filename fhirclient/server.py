@@ -126,6 +126,10 @@ class FHIRServer(object):
             raise Exception("Not ready to reauthorize, I do not have an auth instance")
         return self.auth.reauthorize(self) if self.auth is not None else None
     
+    def registration(self):
+        if self.auth is None:
+            raise Exception("Not ready to authorize, I do not have an auth instance")
+        return self.auth.registration(self) if self.auth is not None else None
     
     # MARK: Requests
     
