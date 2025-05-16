@@ -60,6 +60,10 @@ class FHIRServer(object):
         if self.client is not None:
             self.client.save_state()
     
+    def load_state(self, auth_state):
+        if self.client is not None:
+            return self.client.load_state(auth_state)
+        return None    
     
     # MARK: Server CapabilityStatement
     
