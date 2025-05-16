@@ -28,7 +28,7 @@ class FHIRClient(object):
         - `launch_token`: The launch token
     """
     
-    def __init__(self, settings=None, state=None, save_func=lambda x:x):
+    def __init__(self, settings=None, state=None, save_func=None, load_func=None):
         self.app_id = None
         self.app_secret = None
         """ The app-id for the app this client is used in. """
@@ -55,11 +55,10 @@ class FHIRClient(object):
         """ If present, is included as part of the request to authenticate
         with a backend system through a client_assertion parameter
         """
-        
-        if save_func is None:
-            raise Exception("Must supply a save_func when initializing the SMART client")
+
         self._save_func = save_func
-        
+        self._load_func = load_func
+
         # init from state
         if state is not None:
             self.from_state(state)
@@ -241,4 +240,9 @@ class FHIRClient(object):
         self.jwt_token = state.get('jwt_token') or self.jwt_token
     
     def save_state (self):
-        self._save_func(self.state)
+        if self._save_func is not None:
+            self._save_func(self.state)
+
+    def load_state(self, auth_state):
+        if self._load_func is not None:
+            return self._load_func(auth_state)

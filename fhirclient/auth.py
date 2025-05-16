@@ -9,6 +9,8 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives._serialization import Encoding, PublicFormat
 from jwt.algorithms import RSAAlgorithm
 
+from .utils import generate_pkce_challenge
+
 logger = logging.getLogger(__name__)
 
 class FHIRAuth(object):
@@ -153,7 +155,10 @@ class FHIROAuth2Auth(FHIRAuth):
         self.client_id = None
         self.private_key = None
         self.public_key = None
-        
+
+        self.code_verifier = None
+        self.code_challenge = None
+
         super(FHIROAuth2Auth, self).__init__(state=state)
     
     @property
@@ -214,8 +219,7 @@ class FHIROAuth2Auth(FHIRAuth):
             raise Exception("Cannot create an authorize-uri without server instance")
         if self.auth_state is None:
             self.auth_state = str(uuid.uuid4())
-            server.should_save_state()
-        
+
         params = {
             'response_type': 'code',
             'client_id': self.app_id,
@@ -226,6 +230,36 @@ class FHIROAuth2Auth(FHIRAuth):
         }
         if server.launch_token is not None:
             params['launch'] = server.launch_token
+
+        smart_configuration = None
+        try:
+            smart_configuration_url = self.aud
+            if self.aud.endswith('/'):
+                smart_configuration_url = self.aud[:-1]
+
+            smart_configuration_url += '/.well-known/smart-configuration'
+            response = server.request_data(smart_configuration_url)
+
+            smart_configuration = json.loads(response.decode('utf-8'))
+        except:
+            # Skip if exception is raised
+            pass
+
+        if (
+            smart_configuration 
+            and 'code_challenge_methods_supported' in smart_configuration
+            and 'S256' in smart_configuration['code_challenge_methods_supported']
+        ):
+            challenge = generate_pkce_challenge()
+
+            self.code_verifier = challenge['code_verifier']
+            self.code_challenge = challenge['code_challenge']
+
+            params['code_challenge'] = challenge['code_challenge']
+            params['code_challenge_method'] = 'S256'
+
+        server.should_save_state()
+
         return params
     
     def handle_callback(self, url, server):
@@ -256,7 +290,10 @@ class FHIROAuth2Auth(FHIRAuth):
         code = args.get('code')
         if code is None:
             raise Exception("Did not receive a code, only have: {0}".format(', '.join(args.keys())))
-        
+
+        stored_state = server.load_state(auth_state=stt)
+        if stored_state is not None:
+            self.from_state(stored_state)
         # exchange code for token
         exchange = self._code_exchange_params(code)
         return self._request_access_token(server, exchange)
@@ -265,14 +302,19 @@ class FHIROAuth2Auth(FHIRAuth):
         """ These parameters are used by to exchange the given code for an
         access token.
         """
-        return {
+        params = {
             'client_id': self.app_id,
             'code': code,
             'grant_type': 'authorization_code',
             'redirect_uri': self._redirect_uri,
             'state': self.auth_state,
         }
-    
+
+        if self.code_verifier is not None:
+            params['code_verifier'] = self.code_verifier
+
+        return params
+
     def _request_access_token(self, server, params):
         """ Requests an access token from the instance's server via a form POST
         request, remembers the token (and patient id if there is one) or
@@ -480,7 +522,12 @@ class FHIROAuth2Auth(FHIRAuth):
             s['access_token'] = self.access_token
         if self.refresh_token is not None:
             s['refresh_token'] = self.refresh_token
-        
+
+        if self.code_verifier is not None:
+            s['code_verifier'] = self.code_verifier
+        if self.code_challenge is not None:
+            s['code_challenge'] = self.code_challenge
+
         return s
     
     def from_state(self, state):
@@ -504,8 +551,11 @@ class FHIROAuth2Auth(FHIRAuth):
         self.private_key = state.get('private_key') or self.private_key
         self.public_key = state.get('public_key') or self.public_key
 
-    # MARK: Utilities    
-    
+        self.code_verifier = state.get('code_verifier') or self.code_verifier
+        self.code_challenge = state.get('code_challenge') or self.code_challenge
+
+    # MARK: Utilities
+
     def extract_oauth_error(self, args):
         """ Check if an argument dictionary contains OAuth error information.
         """
