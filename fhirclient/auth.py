@@ -212,6 +212,12 @@ class FHIROAuth2Auth(FHIRAuth):
         
         return urlparse.urlunsplit(parts)
     
+    def _supports_pkce_s256(self, smart_configuration):
+        return (smart_configuration 
+            and 'code_challenge_methods_supported' in smart_configuration
+            and 'S256' in smart_configuration['code_challenge_methods_supported'])
+
+    
     def _authorize_params(self, server):
         """ The URL parameters to use when requesting a token code.
         """
@@ -247,11 +253,7 @@ class FHIROAuth2Auth(FHIRAuth):
             logger.warning(f"Failed to fetch SMART configuration: {e}")
             smart_configuration = None
 
-        if (
-            smart_configuration 
-            and 'code_challenge_methods_supported' in smart_configuration
-            and 'S256' in smart_configuration['code_challenge_methods_supported']
-        ):
+        if self._supports_pkce_s256(smart_configuration):
             challenge = generate_pkce_challenge()
 
             self.code_verifier = challenge['code_verifier']

@@ -20,10 +20,16 @@ def digest_sha256(payload: str) -> bytes:
 
 
 def generate_pkce_challenge(entropy: int = 256) -> Dict[str, str]:
-    """Generates a PKCE code verifier and challenge for OAuth 2.0 PKCE extension.
-
-    The entropy parameter controls the randomness of the code verifier (default: 96 bits).
-    Returns a dict with 'code_verifier' and 'code_challenge' using S256 method.
+    """Generate PKCE code verifier and challenge pair using S256 method.
+    
+    Args:
+        entropy: Number of random bits (min 256 per RFC 7636)
+        
+    Returns:
+        Dict with 'code_verifier' and 'code_challenge'
+        
+    Raises:
+        ValueError: If entropy is less than 256 bits
     """
 
     if entropy < 256:
