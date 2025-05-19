@@ -231,7 +231,6 @@ class FHIROAuth2Auth(FHIRAuth):
         if server.launch_token is not None:
             params['launch'] = server.launch_token
 
-        smart_configuration = None
         try:
             smart_configuration_url = self.aud
             if self.aud.endswith('/'):
@@ -241,9 +240,12 @@ class FHIROAuth2Auth(FHIRAuth):
             response = server.request_data(smart_configuration_url)
 
             smart_configuration = json.loads(response.decode('utf-8'))
-        except:
-            # Skip if exception is raised
-            pass
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.warning(f"Failed to parse SMART configuration: {e}")
+            smart_configuration = None
+        except Exception as e:
+            logger.warning(f"Failed to fetch SMART configuration: {e}")
+            smart_configuration = None
 
         if (
             smart_configuration 
