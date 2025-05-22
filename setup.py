@@ -27,7 +27,7 @@ def find_version(*file_paths):
 
 setup(
     name='fhirclientdstu2',
-    version=find_version("fhirclient/client.py"),
+    version=find_version("fhirclientdstu2/client.py"),
     description='A flexible client for FHIR servers supporting the SMART on FHIR protocol',
     long_description=(read('README.md') + '\n\n' +
                       read('AUTHORS.md')),
@@ -37,7 +37,6 @@ setup(
     author="SMART Platforms Team",
     author_email='support@smarthealthit.org',
     packages=find_packages(exclude=['test*', '*_tests.py']),
-    package_dir={'fhirclientdstu2': 'fhirclient'},
     install_requires=['requests', 'isodate'],
     classifiers=[
         'Development Status :: 4 - Beta',

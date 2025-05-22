@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 
 import logging
-from fhirclient import client
-from fhirclient.models.medication import Medication
-from fhirclient.models.medicationorder import MedicationOrder
+from fhirclientdstu2 import client
+from fhirclientdstu2.models.medication import Medication
+from fhirclientdstu2.models.medicationorder import MedicationOrder
 
 from flask import Flask, request, redirect, session
 
