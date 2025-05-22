@@ -37,7 +37,7 @@ setup(
     author="SMART Platforms Team",
     author_email='support@smarthealthit.org',
     packages=find_packages(exclude=['test*', '*_tests.py']),
-    package_dir={'fhirclientdstu2': 'fhirclient'},
+    package_dir={'': 'fhirclient'},
     install_requires=['requests', 'isodate'],
     classifiers=[
         'Development Status :: 4 - Beta',
