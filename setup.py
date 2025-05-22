@@ -26,7 +26,7 @@ def find_version(*file_paths):
     raise RuntimeError("Unable to find version string.")
 
 setup(
-    name='fhirclient',
+    name='fhirclientdstu2',
     version=find_version("fhirclient/client.py"),
     description='A flexible client for FHIR servers supporting the SMART on FHIR protocol',
     long_description=(read('README.md') + '\n\n' +
