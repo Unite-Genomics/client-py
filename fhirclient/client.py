@@ -159,6 +159,8 @@ class FHIRClient(object):
             self.patient_id = ctx['patient']        # TODO: TEST THIS!
         if 'id_token' in ctx:
             logger.warning("SMART: Received an id_token, ignoring")
+        if 'scope' in ctx:
+            self.scope = ctx['scope']
         self.launch_context = ctx
         self.save_state()
     
