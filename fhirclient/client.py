@@ -153,12 +153,19 @@ class FHIRClient(object):
         return ctx
     
     def _handle_launch_context(self, ctx):
+        """ Handle authorization response context, updating client state for patient, scope, and other context data.
+    
+        :param dict ctx: The authorization context containing patient, scope, and other SMART launch parameters
+        """
+        
         logger.debug("SMART: Handling launch context: {0}".format(ctx))
         if 'patient' in ctx:
             #print('Patient id was {0}, row context is {1}'.format(self.patient_id, ctx))
             self.patient_id = ctx['patient']        # TODO: TEST THIS!
         if 'id_token' in ctx:
             logger.warning("SMART: Received an id_token, ignoring")
+        if 'scope' in ctx:
+            self.scope = ctx['scope']
         self.launch_context = ctx
         self.save_state()
     
