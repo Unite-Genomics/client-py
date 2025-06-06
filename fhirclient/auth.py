@@ -334,28 +334,17 @@ class FHIROAuth2Auth(FHIRAuth):
         if self.app_secret:
             auth = (self.app_id, self.app_secret)
         ret_params = server.post_as_form(self._token_uri, params, auth).json()
-        
-        self.access_token = ret_params.get('access_token')
-        if self.access_token is None:
-            raise Exception("No access token received")
-        del ret_params['access_token']
-        
-        if 'expires_in' in ret_params:
-            expires_in = int(ret_params['expires_in'])
-            self.expires_at = datetime.now() + timedelta(seconds=expires_in)
-            del ret_params['expires_in']
-        
-        # The refresh token issued by the authorization server. If present, the
-        # app should discard any previous refresh_token associated with this
-        # launch, replacing it with this new value.
-        refresh_token = ret_params.get('refresh_token') or params.get('refresh_token')
-        if refresh_token is not None:
+
+        processed_params = self._handle_token_params(ret_params)
+
+        refresh_token = params.get('refresh_token')
+        if not self.refresh_token and refresh_token:
             self.refresh_token = refresh_token
-            if 'refresh_token' in ret_params:
-                del ret_params['refresh_token']
+
         logger.debug("SMART AUTH: Received access token: {0}, refresh token: {1}"
-            .format(self.access_token is not None, self.refresh_token is not None))
-        return ret_params
+                     .format(self.access_token is not None, self.refresh_token is not None))
+
+        return processed_params
     
     def _request_access_token_with_client_id(self, server, token_expiry_seconds=300):
         now_in_seconds = int(datetime.now(timezone.utc).timestamp())
@@ -400,6 +389,13 @@ class FHIROAuth2Auth(FHIRAuth):
 
         ret_params = res.json()
 
+        processed_params = self._handle_token_params(ret_params)
+
+        logger.debug("SMART AUTH: Received access token: {0}".format(self.access_token is not None))
+
+        return processed_params
+
+    def _handle_token_params(self, ret_params):
         self.access_token = ret_params.get('access_token')
         if self.access_token is None:
             raise Exception("No access token received")
@@ -410,7 +406,20 @@ class FHIROAuth2Auth(FHIRAuth):
             self.expires_at = datetime.now() + timedelta(seconds=expires_in)
             del ret_params['expires_in']
 
-        logger.debug("SMART AUTH: Received access token: {0}".format(self.access_token is not None))
+        if 'refresh_expires_in' in ret_params:
+            expires_in = int(ret_params['expires_in'])
+            if expires_in > 0:
+                self.expires_at = datetime.now() + timedelta(seconds=expires_in)
+            del ret_params['refresh_expires_in']
+
+        # The refresh token issued by the authorization server. If present, the
+        # app should discard any previous refresh_token associated with this
+        # launch, replacing it with this new value.
+        if 'refresh_token' in ret_params:
+            refresh_token = ret_params.get('refresh_token')
+            if refresh_token is not None:
+                self.refresh_token = refresh_token
+            del ret_params['refresh_token']
 
         return ret_params
 
