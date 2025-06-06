@@ -335,7 +335,7 @@ class FHIROAuth2Auth(FHIRAuth):
             auth = (self.app_id, self.app_secret)
         ret_params = server.post_as_form(self._token_uri, params, auth).json()
 
-        ret_params = self._handle_token_params(ret_params)
+        processed_params = self._handle_token_params(ret_params)
 
         refresh_token = params.get('refresh_token')
         if not self.refresh_token and refresh_token:
@@ -344,7 +344,7 @@ class FHIROAuth2Auth(FHIRAuth):
         logger.debug("SMART AUTH: Received access token: {0}, refresh token: {1}"
                      .format(self.access_token is not None, self.refresh_token is not None))
 
-        return ret_params
+        return processed_params
     
     def _request_access_token_with_client_id(self, server, token_expiry_seconds=300):
         now_in_seconds = int(datetime.now(timezone.utc).timestamp())
@@ -389,11 +389,11 @@ class FHIROAuth2Auth(FHIRAuth):
 
         ret_params = res.json()
 
-        ret_params = self._handle_token_params(ret_params)
+        processed_params = self._handle_token_params(ret_params)
 
         logger.debug("SMART AUTH: Received access token: {0}".format(self.access_token is not None))
 
-        return ret_params
+        return processed_params
 
     def _handle_token_params(self, ret_params):
         self.access_token = ret_params.get('access_token')
