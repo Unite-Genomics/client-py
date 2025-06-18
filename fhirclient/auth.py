@@ -407,9 +407,9 @@ class FHIROAuth2Auth(FHIRAuth):
             del ret_params['expires_in']
 
         if 'refresh_expires_in' in ret_params:
-            expires_in = int(ret_params['expires_in'])
-            if expires_in > 0:
-                self.expires_at = datetime.now() + timedelta(seconds=expires_in)
+            refresh_expires_in = int(ret_params['refresh_expires_in'])
+            if refresh_expires_in > 0:
+                self.expires_at = datetime.now() + timedelta(seconds=refresh_expires_in)
             del ret_params['refresh_expires_in']
 
         # The refresh token issued by the authorization server. If present, the
