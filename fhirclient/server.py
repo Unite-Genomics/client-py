@@ -96,6 +96,8 @@ class FHIRServer(object):
                 'jwt_token': self.client.jwt_token if self.client is not None else None,
             }
             self.auth = FHIRAuth.from_capability_security(security, settings)
+            if self.auth and self.auth.aud is not None and self.auth.aud != self.aud:
+                self.aud = self.auth.aud
             self.should_save_state()
     
     
