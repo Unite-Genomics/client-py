@@ -69,19 +69,15 @@ class FHIRAuth(object):
                 auth_type = 'oauth2'
 
             if 'authorize_uri' in state and 'aud' in state:
-                aud = state['aud']
-                aud_suffix = None
-                if aud is not None:
-                    aud_list = aud.split('/api')
-                    aud = aud_list[0]
-                    aud_suffix = '/api' + aud_list[1]
+                try:
+                    aud = urlparse.urlsplit(state['aud'])
+                    authorize_uri = urlparse.urlsplit(state['authorize_uri'])
+                    if aud.hostname != authorize_uri.hostname:
+                        res = aud._replace(netloc=authorize_uri.netloc)
+                        state['aud'] = res.geturl()
 
-                authorization_uri = state['authorize_uri']
-                if authorization_uri is not None:
-                    authorization_uri = authorization_uri.split('/oauth2')[0]
-
-                if authorization_uri and aud and authorization_uri != aud:
-                    state['aud'] = authorization_uri + aud_suffix
+                except Exception as e:
+                    logger.warning(f"Failed to compare aud and authorize_uri: {e}")
         
         return cls.create(auth_type, state=state)
     
