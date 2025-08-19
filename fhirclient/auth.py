@@ -308,7 +308,7 @@ class FHIROAuth2Auth(FHIRAuth):
         access token.
         """
         params = {
-            'client_id': self.app_id,
+            # 'client_id': self.app_id,         # Its being dynamically added only for epic
             'code': code,
             'grant_type': 'authorization_code',
             'redirect_uri': self._redirect_uri,
@@ -476,7 +476,7 @@ class FHIROAuth2Auth(FHIRAuth):
         if self.refresh_token is None:
             raise Exception("Cannot produce reauthorize parameters without refresh token")
         return {
-            'client_id': self.app_id,
+            # 'client_id': self.app_id,         # Its being dynamically added only for epic
             #'client_secret': None,             # we don't use it
             'grant_type': 'refresh_token',
             'refresh_token': self.refresh_token,
