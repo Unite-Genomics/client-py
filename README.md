@@ -53,7 +53,7 @@ patient = Patient.read('2cda5aad-e409-4070-9a15-e1c35c46ed5a', smart.server)
 print(patient.birthDate.isostring)
 # '1992-07-03'
 print(smart.human_name(patient.name[0]))
-# 'Mr. Geoffrey Abbott'
+# 'Mr. steve Smith'
 ```
 If this is a protected server, you will first have to send your user to the authorization endpoint to log in.
 Just call `smart.authorize_url` to obtain the correct URL.
@@ -90,7 +90,7 @@ from fhirclient.models.patient import Patient
 smart = server.FHIRServer(None, 'https://r4.smarthealthit.org')
 patient = Patient.read('2cda5aad-e409-4070-9a15-e1c35c46ed5a', smart)
 print(patient.name[0].given)
-# ['Geoffrey']
+# ['steve']
 ```
 
 ##### Search Records on Server
@@ -197,6 +197,18 @@ and install the needed packages as shown:
     pip install -r requirements.txt
     # Edit flask_app.py and put your own server's URL as api_base.
     ./flask_app.py
+
+
+## See Also
+
+- [cumulus-fhir-support](https://github.com/smart-on-fhir/cumulus-fhir-support/): similar network
+  client, with more authentication options and built-in retries, but no FHIR classes
+- [fhir.resources](https://github.com/nazrulworld/fhir.resources): similar FHIR classes,
+  but has no network client
+- [fhirpy](https://github.com/beda-software/fhir-py): similar FHIR classes and network client,
+  with async options, but has no OAuth support
+- [smart-fetch](https://github.com/smart-on-fhir/smart-fetch): is a CLI command instead of a Python
+  library, but supports bulk export and REST requests
 
 
 [fhir]: http://www.hl7.org/implement/standards/fhir/
