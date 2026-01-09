@@ -35,7 +35,18 @@ class FHIRServer(object):
     """ Handles talking to a FHIR server.
     """
     
-    def __init__(self, client, base_uri=None, state=None):
+    def __init__(self, client, base_uri=None, state=None,
+                 capability_callback=None, on_capability_fetched=None):
+        """Initialize FHIR server connection.
+
+        :param client: The FHIRClient instance
+        :param base_uri: The FHIR server base URI
+        :param state: State dict to restore from
+        :param capability_callback: Optional callable(base_uri) -> CapabilityStatement or None.
+            Called before fetching to check for cached CapabilityStatement.
+        :param on_capability_fetched: Optional callable(base_uri, CapabilityStatement) -> None.
+            Called after fetching CapabilityStatement from network.
+        """
         self.client = client
         self.auth = None
         self.base_uri = None
@@ -43,7 +54,7 @@ class FHIRServer(object):
 
         # Use a single requests Session for all "requests"
         self.session = requests.Session()
-        
+
         # A URI can't possibly be less than 11 chars
         # make sure we end with "/", otherwise the last path component will be
         # lost when creating URLs with urllib
@@ -51,6 +62,11 @@ class FHIRServer(object):
             self.base_uri = base_uri if '/' == base_uri[-1] else base_uri + '/'
             self.aud = base_uri
         self._capability = None
+
+        # Callbacks for external caching of CapabilityStatement
+        self.capability_callback = capability_callback
+        self.on_capability_fetched = on_capability_fetched
+
         if state is not None:
             self.from_state(state)
         if not self.base_uri or len(self.base_uri) <= 10:
@@ -75,19 +91,35 @@ class FHIRServer(object):
     def get_capability(self, force=False):
         """ Returns the server's CapabilityStatement, retrieving it if needed
         or forced.
+
+        :param force: If True, bypasses the capability_callback and fetches fresh from network.
         """
         if self._capability is None or force:
-            logger.info('Fetching CapabilityStatement from {0}'.format(self.base_uri))
-            from .models import capabilitystatement
-            conf = capabilitystatement.CapabilityStatement.read_from('metadata', self)
-            self._capability = conf
-            
+            # Try callback first (skip if force=True to allow cache bypass)
+            if self.capability_callback is not None and not force:
+                cached = self.capability_callback(self.base_uri)
+                if cached is not None:
+                    logger.info('Using cached CapabilityStatement for {0}'.format(self.base_uri))
+                    self._capability = cached
+
+            # Fetch from server if not in cache
+            if self._capability is None:
+                logger.info('Fetching CapabilityStatement from {0}'.format(self.base_uri))
+                from .models import capabilitystatement
+                conf = capabilitystatement.CapabilityStatement.read_from('metadata', self)
+                self._capability = conf
+
+                # Notify callback of fresh fetch (so caller can cache it)
+                if self.on_capability_fetched is not None:
+                    self.on_capability_fetched(self.base_uri, conf)
+
+            # Initialize auth from capability (whether cached or fetched)
             security = None
             try:
-                security = conf.rest[0].security
+                security = self._capability.rest[0].security
             except Exception as e:
                 logger.info("No REST security statement found in server capability statement")
-            
+
             settings = {
                 'aud': self.aud,
                 'app_id': self.client.app_id if self.client is not None else None,

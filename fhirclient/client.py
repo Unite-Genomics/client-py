@@ -1,7 +1,7 @@
 import logging
 from .server import FHIRServer, FHIRUnauthorizedException, FHIRNotFoundException
 
-__version__ = '4.3.2+unite.1'  # Update docs/Doxyfile too when you bump this
+__version__ = '4.3.2+unite.2'  # Update docs/Doxyfile too when you bump this
 __author__ = 'SMART Platforms Team'
 __license__ = 'APACHE2'
 __copyright__ = "Copyright 2017 Boston Children's Hospital"
@@ -18,7 +18,7 @@ class FHIRClient(object):
     servers.
     
     The settings dictionary supports:
-    
+
         - `app_id`*: Your app/client-id, e.g. 'my_web_app'
         - `app_secret`*: Your app/client-secret
         - `api_base`*: The FHIR service to connect to, e.g. 'https://fhir-api-dstu2.smarthealthit.org'
@@ -26,6 +26,8 @@ class FHIRClient(object):
         - `patient_id`: The patient id against which to operate, if already known
         - `scope`: Space-separated list of scopes to request, if other than default
         - `launch_token`: The launch token
+        - `capability_callback`: Callable(base_uri) -> CapabilityStatement or None, for external caching
+        - `on_capability_fetched`: Callable(base_uri, CapabilityStatement) -> None, called after network fetch
     """
     
     def __init__(self, settings=None, state=None, save_func=None, load_func=None):
@@ -56,6 +58,12 @@ class FHIRClient(object):
         with a backend system through a client_assertion parameter
         """
 
+        self.capability_callback = None
+        """ Callback to check for cached CapabilityStatement before fetching. """
+
+        self.on_capability_fetched = None
+        """ Callback invoked after CapabilityStatement is fetched from network. """
+
         self._save_func = save_func
         self._load_func = load_func
 
@@ -77,7 +85,14 @@ class FHIRClient(object):
             self.scope = settings.get('scope', self.scope)
             self.launch_token = settings.get('launch_token')
             self.jwt_token = settings.get('jwt_token', None)
-            self.server = FHIRServer(self, base_uri=settings['api_base'])
+            self.capability_callback = settings.get('capability_callback')
+            self.on_capability_fetched = settings.get('on_capability_fetched')
+            self.server = FHIRServer(
+                self,
+                base_uri=settings['api_base'],
+                capability_callback=self.capability_callback,
+                on_capability_fetched=self.on_capability_fetched,
+            )
         else:
             raise Exception("Must either supply settings or a state upon client initialization")
     
