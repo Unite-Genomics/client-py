@@ -1,9 +1,12 @@
+import base64
+import hashlib
 import io
 import json
 import os
 import shutil
 import tempfile
 import unittest
+from urllib.parse import urlparse, parse_qs, urlencode
 
 import requests
 import responses
@@ -122,6 +125,46 @@ class TestServer(unittest.TestCase):
         self.assertNotIn("Authorization", mock.calls[1].request.headers)
 
         self.assertEqual(mock.call_count, 2)
+
+    @responses.activate
+    def test_pkce(self):
+        fhir = self.create_server()
+        state = fhir.state
+        assert state["auth"].get("code_verifier") is None
+        assert fhir.auth.code_verifier is None
+        uri = fhir.authorize_uri
+        assert fhir.auth.code_verifier is not None
+        state = fhir.state
+        assert state["auth"]["code_verifier"] == fhir.auth.code_verifier
+
+        authorize_args = parse_qs(urlparse(uri).query)
+        assert "code_challenge_method" in authorize_args
+        assert authorize_args["code_challenge_method"][0] == "S256"
+        assert "code_challenge" in authorize_args
+
+        # check hash
+        verifier_hash = hashlib.sha256(fhir.auth.code_verifier.encode()).digest()
+        b64_hash = base64.urlsafe_b64encode(verifier_hash).decode().rstrip("=")
+        assert authorize_args["code_challenge"][0] == b64_hash
+
+        # check oauth callback
+        mock = responses.add(
+            "POST",
+            fhir.auth._token_uri,
+            json={
+                "access_token": "xyz",
+            },
+        )
+
+        callback_url = f"https://example.org/callback?" + urlencode(
+            dict(code="abc123", state=fhir.auth.auth_state)
+        )
+        fhir.handle_callback(callback_url)
+        assert mock.call_count == 1
+        token_call = mock.calls[0]
+        params = parse_qs(token_call.request.body)
+        assert params["code"][0] == "abc123"
+        assert params["code_verifier"][0] == fhir.auth.code_verifier
 
 
 class MockServer(server.FHIRServer):
