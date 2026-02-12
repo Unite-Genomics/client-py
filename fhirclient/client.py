@@ -29,7 +29,7 @@ class FHIRClient:
         - `capability_callback`: Callable(base_uri) -> CapabilityStatement or None, for external caching
         - `on_capability_fetched`: Callable(base_uri, CapabilityStatement) -> None, called after network fetch
     """
-    def __init__(self, settings=None, state=None, save_func=None, load_func=None):
+    def __init__(self, settings=None, state=None, save_func=lambda x: x, load_func=lambda x: x):
         self.app_id = None
         self.app_secret = None
         """ The app-id for the app this client is used in. """
@@ -65,11 +65,6 @@ class FHIRClient:
 
         self._save_func = save_func
         self._load_func = load_func
-        if save_func is None:
-            raise Exception(
-                "Must supply a save_func when initializing the SMART client"
-            )
-        self._save_func = save_func
 
         # init from state
         if state is not None:
