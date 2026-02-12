@@ -18,6 +18,7 @@ The following wonderful people contributed directly or indirectly to this projec
 - Martin Burchell <https://github.com/martinburchell>
 - Matt Garber <https://github.com/dogversioning>
 - Michael Terry <https://github.com/mikix>
+- Min Ragan-Kelley <https://github.com/minrk>
 - Nikolai Schwertner <https://github.com/nschwertner>
 - Pascal Pfiffner <https://github.com/p2>
 - Raheel Sayeed <https://github.com/raheelsayeed>
