@@ -29,7 +29,7 @@ class FHIRClient:
         - `capability_callback`: Callable(base_uri) -> CapabilityStatement or None, for external caching
         - `on_capability_fetched`: Callable(base_uri, CapabilityStatement) -> None, called after network fetch
     """
-    def __init__(self, settings=None, state=None, save_func=lambda x: x, load_func=lambda x: x):
+    def __init__(self, settings=None, state=None, save_func=lambda x: x, load_func=lambda x: None):
         self.app_id = None
         self.app_secret = None
         """ The app-id for the app this client is used in. """

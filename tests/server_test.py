@@ -129,6 +129,16 @@ class TestServer(unittest.TestCase):
     @responses.activate
     def test_pkce(self):
         fhir = self.create_server()
+
+        # Mock the SMART configuration endpoint to enable PKCE
+        responses.add(
+            "GET",
+            "https://example.invalid/.well-known/smart-configuration",
+            json={
+                "code_challenge_methods_supported": ["S256"],
+            },
+        )
+
         state = fhir.state
         assert state["auth"].get("code_verifier") is None
         assert fhir.auth.code_verifier is None
