@@ -1,7 +1,7 @@
 import logging
 from .server import FHIRServer, FHIRUnauthorizedException, FHIRNotFoundException
 
-__version__ = "4.4.0"  # Update docs/Doxyfile too when you bump this
+__version__ = "4.4.0+unite.1"  # Update docs/Doxyfile too when you bump this
 __author__ = "SMART Platforms Team"
 __license__ = "APACHE2"
 __copyright__ = "Copyright 2017 Boston Children's Hospital"
@@ -26,9 +26,10 @@ class FHIRClient:
         - `patient_id`: The patient id against which to operate, if already known
         - `scope`: Space-separated list of scopes to request, if other than default
         - `launch_token`: The launch token
+        - `capability_callback`: Callable(base_uri) -> CapabilityStatement or None, for external caching
+        - `on_capability_fetched`: Callable(base_uri, CapabilityStatement) -> None, called after network fetch
     """
-
-    def __init__(self, settings=None, state=None, save_func=lambda x: x):
+    def __init__(self, settings=None, state=None, save_func=lambda x: x, load_func=lambda x: None):
         self.app_id = None
         self.app_secret = None
         """ The app-id for the app this client is used in. """
@@ -56,11 +57,14 @@ class FHIRClient:
         with a backend system through a client_assertion parameter
         """
 
-        if save_func is None:
-            raise Exception(
-                "Must supply a save_func when initializing the SMART client"
-            )
+        self.capability_callback = None
+        """ Callback to check for cached CapabilityStatement before fetching. """
+
+        self.on_capability_fetched = None
+        """ Callback invoked after CapabilityStatement is fetched from network. """
+
         self._save_func = save_func
+        self._load_func = load_func
 
         # init from state
         if state is not None:
@@ -72,15 +76,22 @@ class FHIRClient:
                 raise Exception("Must provide 'app_id' in settings dictionary")
             if "api_base" not in settings:
                 raise Exception("Must provide 'api_base' in settings dictionary")
-
-            self.app_id = settings["app_id"]
-            self.app_secret = settings.get("app_secret")
-            self.redirect = settings.get("redirect_uri")
-            self.patient_id = settings.get("patient_id")
-            self.scope = settings.get("scope", self.scope)
-            self.launch_token = settings.get("launch_token")
-            self.jwt_token = settings.get("jwt_token", None)
-            self.server = FHIRServer(self, base_uri=settings["api_base"])
+            
+            self.app_id = settings['app_id']
+            self.app_secret = settings.get('app_secret')
+            self.redirect = settings.get('redirect_uri')
+            self.patient_id = settings.get('patient_id')
+            self.scope = settings.get('scope', self.scope)
+            self.launch_token = settings.get('launch_token')
+            self.jwt_token = settings.get('jwt_token', None)
+            self.capability_callback = settings.get('capability_callback')
+            self.on_capability_fetched = settings.get('on_capability_fetched')
+            self.server = FHIRServer(
+                self,
+                base_uri=settings['api_base'],
+                capability_callback=self.capability_callback,
+                on_capability_fetched=self.on_capability_fetched,
+            )
         else:
             raise Exception(
                 "Must either supply settings or a state upon client initialization"
@@ -151,13 +162,27 @@ class FHIRClient:
         self._handle_launch_context(ctx)
         return self.launch_context is not None
 
+    def registration(self):
+        ctx = self.server.registration() if self.server is not None else None
+        return ctx
+    
     def _handle_launch_context(self, ctx):
-        logger.debug(f"SMART: Handling launch context: {ctx}")
-        if "patient" in ctx:
-            # print('Patient id was {0}, row context is {1}'.format(self.patient_id, ctx))
-            self.patient_id = ctx["patient"]  # TODO: TEST THIS!
-        if "id_token" in ctx:
+        """ Handle authorization response context, updating client state for patient, scope, and other context data.
+
+        :param dict ctx: The authorization context containing patient, scope, and other SMART launch parameters
+        """
+        if ctx is None:
+            logger.debug("SMART: No launch context to handle")
+            return
+
+        logger.debug("SMART: Handling launch context: {0}".format(ctx))
+        if 'patient' in ctx:
+            #print('Patient id was {0}, row context is {1}'.format(self.patient_id, ctx))
+            self.patient_id = ctx['patient']        # TODO: TEST THIS!
+        if 'id_token' in ctx:
             logger.warning("SMART: Received an id_token, ignoring")
+        if 'scope' in ctx:
+            self.scope = ctx['scope']
         self.launch_context = ctx
         self.save_state()
 
@@ -227,15 +252,20 @@ class FHIRClient:
 
     def from_state(self, state):
         assert state
-        self.app_id = state.get("app_id") or self.app_id
-        self.app_secret = state.get("app_secret") or self.app_secret
-        self.scope = state.get("scope") or self.scope
-        self.redirect = state.get("redirect") or self.redirect
-        self.patient_id = state.get("patient_id") or self.patient_id
-        self.launch_token = state.get("launch_token") or self.launch_token
-        self.launch_context = state.get("launch_context") or self.launch_context
-        self.server = FHIRServer(self, state=state.get("server"))
-        self.jwt_token = state.get("jwt_token") or self.jwt_token
+        self.app_id = state.get('app_id') or self.app_id
+        self.app_secret = state.get('app_secret') or self.app_secret
+        self.scope = state.get('scope') or self.scope
+        self.redirect = state.get('redirect') or self.redirect
+        self.patient_id = state.get('patient_id') or self.patient_id
+        self.launch_token = state.get('launch_token') or self.launch_token
+        self.launch_context = state.get('launch_context') or self.launch_context
+        self.server = FHIRServer(self, state=state.get('server'))
+        self.jwt_token = state.get('jwt_token') or self.jwt_token
+    
+    def save_state (self):
+        if self._save_func is not None:
+            self._save_func(self.state)
 
-    def save_state(self):
-        self._save_func(self.state)
+    def load_state(self, auth_state):
+        if self._load_func is not None:
+            return self._load_func(auth_state)

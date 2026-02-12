@@ -1,11 +1,18 @@
-import base64
-import hashlib
+import json
+import jwt
 import uuid
 import logging
+import base64
+import hashlib
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import urllib.parse as urlparse
 from urllib.parse import urlencode
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives._serialization import Encoding, PublicFormat
+from jwt.algorithms import RSAAlgorithm
+
+from .utils import generate_pkce_challenge
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +135,9 @@ class FHIRAuth:
         """
         return None
 
+    def registration(self, server):
+        return None
+    
     # MARK: State
 
     @property
@@ -159,8 +169,16 @@ class FHIROAuth2Auth(FHIRAuth):
         self.access_token = None
         self.refresh_token = None
         self.expires_at = None
+        self.refresh_expires_in = None
         self.jwt_token = None
+
+        self.key_id = None
+        self.client_id = None
+        self.private_key = None
+        self.public_key = None
+
         self.code_verifier = None
+        self.code_challenge = None
 
         super(FHIROAuth2Auth, self).__init__(state=state)
 
@@ -215,7 +233,13 @@ class FHIROAuth2Auth(FHIRAuth):
         parts[3] = urlencode(auth_params, doseq=True)
 
         return urlparse.urlunsplit(parts)
+    
+    def _supports_pkce_s256(self, smart_configuration):
+        return (smart_configuration 
+            and 'code_challenge_methods_supported' in smart_configuration
+            and 'S256' in smart_configuration['code_challenge_methods_supported'])
 
+    
     def _authorize_params(self, server):
         """The URL parameters to use when requesting a token code."""
         if server is None:
@@ -233,19 +257,34 @@ class FHIROAuth2Auth(FHIRAuth):
             "state": self.auth_state,
         }
         if server.launch_token is not None:
-            params["launch"] = server.launch_token
+            params['launch'] = server.launch_token
 
-        # PKCE parameters
-        # server is free to ignore PKCE,
-        # so it should never be wrong to include it
-        if self.code_verifier is None:
-            self.code_verifier = secrets.token_urlsafe(64)
-            server.should_save_state()
-        verifier_hash = hashlib.sha256(self.code_verifier.encode()).digest()
-        params["code_challenge"] = (
-            base64.urlsafe_b64encode(verifier_hash).decode().rstrip("=")
-        )
-        params["code_challenge_method"] = "S256"
+        try:
+            smart_configuration_url = self.aud
+            if self.aud.endswith('/'):
+                smart_configuration_url = self.aud[:-1]
+
+            smart_configuration_url += '/.well-known/smart-configuration'
+            response = server.request_data(smart_configuration_url)
+
+            smart_configuration = json.loads(response.decode('utf-8'))
+        except (ValueError, json.JSONDecodeError) as e:
+            logger.warning(f"Failed to parse SMART configuration: {e}")
+            smart_configuration = None
+        except Exception as e:
+            logger.warning(f"Failed to fetch SMART configuration: {e}")
+            smart_configuration = None
+
+        if self._supports_pkce_s256(smart_configuration):
+            challenge = generate_pkce_challenge()
+
+            self.code_verifier = challenge['code_verifier']
+            self.code_challenge = challenge['code_challenge']
+
+            params['code_challenge'] = challenge['code_challenge']
+            params['code_challenge_method'] = 'S256'
+
+        server.should_save_state()
 
         return params
 
@@ -278,10 +317,11 @@ class FHIROAuth2Auth(FHIRAuth):
 
         code = args.get("code")
         if code is None:
-            raise Exception(
-                "Did not receive a code, only have: {0}".format(", ".join(args.keys()))
-            )
+            raise Exception("Did not receive a code, only have: {0}".format(', '.join(args.keys())))
 
+        stored_state = server.load_state(auth_state=stt)
+        if stored_state is not None:
+            self.from_state(stored_state)
         # exchange code for token
         exchange = self._code_exchange_params(code)
         return self._request_access_token(server, exchange)
@@ -290,14 +330,18 @@ class FHIROAuth2Auth(FHIRAuth):
         """These parameters are used by to exchange the given code for an
         access token.
         """
-        return {
-            "client_id": self.app_id,
-            "code": code,
-            "grant_type": "authorization_code",
-            "redirect_uri": self._redirect_uri,
-            "state": self.auth_state,
-            "code_verifier": self.code_verifier,
+        params = {
+            # 'client_id': self.app_id,         # Its being dynamically added only for epic
+            'code': code,
+            'grant_type': 'authorization_code',
+            'redirect_uri': self._redirect_uri,
+            'state': self.auth_state,
         }
+
+        if self.code_verifier is not None:
+            params['code_verifier'] = self.code_verifier
+
+        return params
 
     def _request_access_token(self, server, params):
         """Requests an access token from the instance's server via a form POST
@@ -315,29 +359,93 @@ class FHIROAuth2Auth(FHIRAuth):
             auth = (self.app_id, self.app_secret)
         ret_params = server.post_as_form(self._token_uri, params, auth).json()
 
-        self.access_token = ret_params.get("access_token")
+        processed_params = self._handle_token_params(ret_params)
+
+        refresh_token = params.get('refresh_token')
+        if not self.refresh_token and refresh_token:
+            self.refresh_token = refresh_token
+
+        logger.debug("SMART AUTH: Received access token: {0}, refresh token: {1}"
+                     .format(self.access_token is not None, self.refresh_token is not None))
+
+        return processed_params
+    
+    def _request_access_token_with_client_id(self, server, token_expiry_seconds=300):
+        now_in_seconds = int(datetime.now(timezone.utc).timestamp())
+
+        future_time_expiry = token_expiry_seconds
+
+        claim = {
+            'iss': self.client_id,
+            'sub': self.client_id,
+            "aud": self._token_uri,
+            'jti': str(uuid.uuid4()),
+            'exp': now_in_seconds + future_time_expiry,
+            'nbf': now_in_seconds,
+            'iat': now_in_seconds,
+        }
+
+        jwt_headers = {
+            "alg": "RS384",
+            "typ": "JWT",
+            "kid": self.key_id,
+        }
+
+        signed_jwt = jwt.encode(
+            headers=jwt_headers,
+            payload=claim,
+            key=self.private_key,
+            algorithm="RS384"
+        )
+
+        # Prepare the access token request
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        payload = {
+            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            "client_id": self.client_id,
+            "assertion": signed_jwt,
+        }
+
+        res = server.session.post(self._token_uri, headers=headers, data=payload)
+        server.raise_for_status(res)
+
+        ret_params = res.json()
+
+        processed_params = self._handle_token_params(ret_params)
+
+        logger.debug("SMART AUTH: Received access token: {0}".format(self.access_token is not None))
+
+        return processed_params
+
+    def _handle_token_params(self, ret_params):
+        self.access_token = ret_params.get('access_token')
         if self.access_token is None:
             raise Exception("No access token received")
-        del ret_params["access_token"]
+        del ret_params['access_token']
 
-        if "expires_in" in ret_params:
-            expires_in = int(ret_params["expires_in"])
+        if 'expires_in' in ret_params:
+            expires_in = int(ret_params['expires_in'])
             self.expires_at = datetime.now() + timedelta(seconds=expires_in)
-            del ret_params["expires_in"]
+            del ret_params['expires_in']
+
+        if 'refresh_expires_in' in ret_params:
+            self.refresh_expires_in = int(ret_params['refresh_expires_in'])
+            del ret_params['refresh_expires_in']
 
         # The refresh token issued by the authorization server. If present, the
         # app should discard any previous refresh_token associated with this
         # launch, replacing it with this new value.
-        refresh_token = ret_params.get("refresh_token") or params.get("refresh_token")
-        if refresh_token is not None:
-            self.refresh_token = refresh_token
-            if "refresh_token" in ret_params:
-                del ret_params["refresh_token"]
-        logger.debug(
-            f"SMART AUTH: Received access token: {self.access_token is not None}, refresh token: {self.refresh_token is not None}"
-        )
+        if 'refresh_token' in ret_params:
+            refresh_token = ret_params.get('refresh_token')
+            if refresh_token is not None:
+                self.refresh_token = refresh_token
+            del ret_params['refresh_token']
+
         return ret_params
 
+    
     # MARK: Authorization
 
     def authorize(self, server):
@@ -374,14 +482,18 @@ class FHIROAuth2Auth(FHIRAuth):
         :param server: The Server instance to use
         :returns: The launch context dictionary, or None on failure
         """
-        if self.refresh_token is None:
-            logger.debug("SMART AUTH: Cannot reauthorize without refresh token")
-            return None
+        if self.refresh_token is not None:
+            logger.debug("SMART AUTH: Refreshing token using refresh token")
+            reauth = self._reauthorize_params()
+            return self._request_access_token(server, reauth)
 
-        logger.debug("SMART AUTH: Refreshing token")
-        reauth = self._reauthorize_params()
-        return self._request_access_token(server, reauth)
+        if self.client_id is not None:
+            logger.debug("SMART AUTH: Refreshing token using dynamic client id")
+            return self._request_access_token_with_client_id(server)
 
+        logger.debug("SMART AUTH: Cannot reauthorize without refresh token")
+        return None
+    
     def _reauthorize_params(self):
         """Parameters to be used in a reauthorize request."""
         if self.refresh_token is None:
@@ -389,12 +501,46 @@ class FHIROAuth2Auth(FHIRAuth):
                 "Cannot produce reauthorize parameters without refresh token"
             )
         return {
-            "client_id": self.app_id,
+            # 'client_id': self.app_id,         # Its being dynamically added only for epic
             #'client_secret': None,             # we don't use it
             "grant_type": "refresh_token",
             "refresh_token": self.refresh_token,
         }
 
+    def registration(self, server):
+        if self.public_key is None:
+            raise ValueError("Public key must be set before registration")
+
+        public_key_pem = self.public_key.public_bytes(
+            encoding=Encoding.PEM,
+            format=PublicFormat.SubjectPublicKeyInfo,  # Standard format
+        )
+        alg = RSAAlgorithm(hashes.SHA384)
+        key = alg.prepare_key(public_key_pem)
+
+        # Export the public key in JWK format
+        public_key_jwk = json.loads(RSAAlgorithm.to_jwk(key))
+
+        # Prepare the registration request
+        request_body = {
+            "software_id": self.app_id,
+            "jwks": {
+                "keys": [dict(
+                    **public_key_jwk,
+                    kid=self.key_id
+                )],
+            },
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.access_token}",
+        }
+        res = server.session.post(self._registration_uri, headers=headers, json=request_body)
+        server.raise_for_status(res)
+        return res.json()
+    
+    
     # MARK: State
 
     @property
@@ -412,27 +558,38 @@ class FHIROAuth2Auth(FHIRAuth):
         if self.access_token is not None:
             s["access_token"] = self.access_token
         if self.refresh_token is not None:
-            s["refresh_token"] = self.refresh_token
+            s['refresh_token'] = self.refresh_token
+
         if self.code_verifier is not None:
-            s["code_verifier"] = self.code_verifier
+            s['code_verifier'] = self.code_verifier
+        if self.code_challenge is not None:
+            s['code_challenge'] = self.code_challenge
 
         return s
-
+    
     def from_state(self, state):
-        """Update ivars from given state information."""
+        """ Update ivars from given state information.
+        """
         super(FHIROAuth2Auth, self).from_state(state)
-        self.aud = state.get("aud") or self.aud
-        self._registration_uri = state.get("registration_uri") or self._registration_uri
-        self._authorize_uri = state.get("authorize_uri") or self._authorize_uri
-        self._redirect_uri = state.get("redirect_uri") or self._redirect_uri
-        self._token_uri = state.get("token_uri") or self._token_uri
-        self.auth_state = state.get("auth_state") or self.auth_state
-        self.app_secret = state.get("app_secret") or self.app_secret
+        self.aud = state.get('aud') or self.aud
+        self._registration_uri = state.get('registration_uri') or self._registration_uri
+        self._authorize_uri = state.get('authorize_uri') or self._authorize_uri
+        self._redirect_uri = state.get('redirect_uri') or self._redirect_uri
+        self._token_uri = state.get('token_uri') or self._token_uri
+        self.auth_state = state.get('auth_state') or self.auth_state
+        self.app_secret = state.get('app_secret') or self.app_secret
+        
+        self.access_token = state.get('access_token') or self.access_token
+        self.refresh_token = state.get('refresh_token') or self.refresh_token
+        self.jwt_token = state.get('jwt_token') or self.jwt_token
 
-        self.access_token = state.get("access_token") or self.access_token
-        self.refresh_token = state.get("refresh_token") or self.refresh_token
-        self.jwt_token = state.get("jwt_token") or self.jwt_token
-        self.code_verifier = state.get("code_verifier") or self.code_verifier
+        self.key_id = state.get('key_id') or self.key_id
+        self.client_id = state.get('client_id') or self.client_id
+        self.private_key = state.get('private_key') or self.private_key
+        self.public_key = state.get('public_key') or self.public_key
+
+        self.code_verifier = state.get('code_verifier') or self.code_verifier
+        self.code_challenge = state.get('code_challenge') or self.code_challenge
 
     # MARK: Utilities
 

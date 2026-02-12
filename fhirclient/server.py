@@ -31,10 +31,22 @@ class FHIRNotFoundException(Exception):
         self.response = response
 
 
-class FHIRServer:
-    """Handles talking to a FHIR server."""
+class FHIRServer(object):
+    """ Handles talking to a FHIR server.
+    """
+    
+    def __init__(self, client, base_uri=None, state=None,
+                 capability_callback=None, on_capability_fetched=None):
+        """Initialize FHIR server connection.
 
-    def __init__(self, client, base_uri=None, state=None):
+        :param client: The FHIRClient instance
+        :param base_uri: The FHIR server base URI
+        :param state: State dict to restore from
+        :param capability_callback: Optional callable(base_uri) -> CapabilityStatement or None.
+            Called before fetching to check for cached CapabilityStatement.
+        :param on_capability_fetched: Optional callable(base_uri, CapabilityStatement) -> None.
+            Called after fetching CapabilityStatement from network.
+        """
         self.client = client
         self.auth = None
         self.base_uri = None
@@ -50,6 +62,11 @@ class FHIRServer:
             self.base_uri = base_uri if "/" == base_uri[-1] else base_uri + "/"
             self.aud = base_uri
         self._capability = None
+
+        # Callbacks for external caching of CapabilityStatement
+        self.capability_callback = capability_callback
+        self.on_capability_fetched = on_capability_fetched
+
         if state is not None:
             self.from_state(state)
         if not self.base_uri or len(self.base_uri) <= 10:
@@ -60,7 +77,12 @@ class FHIRServer:
     def should_save_state(self):
         if self.client is not None:
             self.client.save_state()
-
+    
+    def load_state(self, auth_state):
+        if self.client is not None:
+            return self.client.load_state(auth_state)
+        return None    
+    
     # MARK: Server CapabilityStatement
 
     @property
@@ -71,21 +93,34 @@ class FHIRServer:
     def get_capability(self, force=False):
         """Returns the server's CapabilityStatement, retrieving it if needed
         or forced.
+
+        :param force: If True, bypasses the capability_callback and fetches fresh from network.
         """
         if self._capability is None or force:
-            logger.info(f"Fetching CapabilityStatement from {self.base_uri}")
-            from .models import capabilitystatement
+            # Try callback first (skip if force=True to allow cache bypass)
+            if self.capability_callback is not None and not force:
+                cached = self.capability_callback(self.base_uri)
+                if cached is not None:
+                    logger.info('Using cached CapabilityStatement for {0}'.format(self.base_uri))
+                    self._capability = cached
 
-            conf = capabilitystatement.CapabilityStatement.read_from("metadata", self)
-            self._capability = conf
+            # Fetch from server if not in cache
+            if self._capability is None:
+                logger.info('Fetching CapabilityStatement from {0}'.format(self.base_uri))
+                from .models import capabilitystatement
+                conf = capabilitystatement.CapabilityStatement.read_from('metadata', self)
+                self._capability = conf
 
+                # Notify callback of fresh fetch (so caller can cache it)
+                if self.on_capability_fetched is not None:
+                    self.on_capability_fetched(self.base_uri, conf)
+
+            # Initialize auth from capability (whether cached or fetched)
             security = None
             try:
-                security = conf.rest[0].security
-            except Exception:
-                logger.info(
-                    "No REST security statement found in server capability statement"
-                )
+                security = self._capability.rest[0].security
+            except Exception as e:
+                logger.info("No REST security statement found in server capability statement")
 
             settings = {
                 "aud": self.aud,
@@ -133,7 +168,12 @@ class FHIRServer:
         if self.auth is None:
             raise Exception("Not ready to reauthorize, I do not have an auth instance")
         return self.auth.reauthorize(self) if self.auth is not None else None
-
+    
+    def registration(self):
+        if self.auth is None:
+            raise Exception("Not ready to authorize, I do not have an auth instance")
+        return self.auth.registration(self) if self.auth is not None else None
+    
     # MARK: Requests
 
     @property
@@ -310,5 +350,6 @@ class FHIRServer:
     def from_state(self, state):
         """Update ivars from given state information."""
         assert state
-        self.base_uri = state.get("base_uri") or self.base_uri
-        self.auth = FHIRAuth.create(state.get("auth_type"), state=state.get("auth"))
+        self.base_uri = state.get('base_uri') or self.base_uri
+        self.auth = FHIRAuth.create(state.get('auth_type'), state=state.get('auth'))
+    
