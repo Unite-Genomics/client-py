@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - main-unite
 
 # The goal here is to cancel older workflows when a PR is updated (because it's pointless work)
 concurrency:
