@@ -2,6 +2,12 @@
 
 This document describes the steps to release a new version of the unite client-py package to PyPI.
 
+## Overview
+
+Building a new release for our fork is done by creating a new tag out of the last commit in `main-unite`. The tag should follow the format `4.4.0+unite.1` where:
+- `4.4.0` is the version of the original package (upstream fhirclient)
+- `+unite.x` is our update on their version (increment `x` for each release)
+
 ## Prerequisites
 
 - You have write access to the repository
