@@ -4,7 +4,8 @@ This document describes the steps to release a new version of the unite client-p
 
 ## Overview
 
-Building a new release for our fork is done by creating a new tag out of the last commit in `main-unite`. The tag should follow the format `4.4.0+unite.1` where:
+Building a new release for our fork is done by creating a new tag out of the last commit in `main-unite`.
+The tag should follow the format `4.4.0+unite.1` where:
 - `4.4.0` is the version of the original package (upstream fhirclient)
 - `+unite.x` is our update on their version (increment `x` for each release)
 
@@ -36,7 +37,7 @@ Example: `4.4.0+unite.1` → `4.4.0+unite.2`
 3. Get the PR reviewed and approved
 4. Merge the PR to `main-unite`
 
-### 3. Create a GitHub Release
+### 3. Create a GitHub Release ( Currently no applicable because we are not publishing new versions)
 
 The PyPI publish workflow (`.github/workflows/pypi.yaml`) is triggered when a GitHub release is created.
 
@@ -48,7 +49,7 @@ The PyPI publish workflow (`.github/workflows/pypi.yaml`) is triggered when a Gi
 6. Add release notes describing the changes
 7. Click **"Publish release"**
 
-### 4. Verify the Release
+### 4. Verify the Release ( Currently no applicable because we are not publishing new versions)
 
 After publishing the release:
 
@@ -66,13 +67,13 @@ The release workflow (`.github/workflows/pypi.yaml`) performs the following step
 
 ## Troubleshooting
 
-### PyPI workflow failed
+### PyPI workflow failed ( Currently no applicable because we are not publishing new versions)
 
 - Check the Actions tab for error details
 - Ensure the version in `fhirclient/client.py` doesn't already exist on PyPI
 - Verify PyPI trusted publishing is configured correctly for the repository
 
-### Version mismatch
+### Version mismatch ( Currently no applicable because we are not publishing new versions)
 
 - The version in `fhirclient/client.py` should match the Git tag (without the `v` prefix)
 - Example: Tag `v4.4.0+unite.2` should have `__version__ = "4.4.0+unite.2"`
