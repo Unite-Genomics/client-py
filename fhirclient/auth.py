@@ -407,6 +407,8 @@ class FHIROAuth2Auth(FHIRAuth):
             "client_id": self.client_id,
             "assertion": signed_jwt,
         }
+        if server.desired_scope:
+            payload["scope"] = server.desired_scope
 
         res = server.session.post(self._token_uri, headers=headers, data=payload)
         server.raise_for_status(res)
