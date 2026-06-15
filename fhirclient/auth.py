@@ -8,6 +8,8 @@ import secrets
 from datetime import datetime, timedelta, timezone
 import urllib.parse as urlparse
 from urllib.parse import urlencode
+
+import requests as _requests_lib
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives._serialization import Encoding, PublicFormat
 from jwt.algorithms import RSAAlgorithm
@@ -90,7 +92,62 @@ class FHIRAuth:
             ):
                 auth_type = "oauth2"
 
+        # Fallback: if CapabilityStatement had no security block (or no OAuth
+        # extensions), try .well-known/smart-configuration before giving up.
+        # Some FHIR servers (e.g. Elevance Health) don't advertise OAuth in
+        # their CapabilityStatement but do support it via .well-known.
+        if auth_type is None and state and state.get("aud"):
+            auth_type = cls._try_well_known_discovery(state)
+
         return cls.create(auth_type, state=state)
+
+    @classmethod
+    def _try_well_known_discovery(cls, state):
+        """Try to discover OAuth endpoints from .well-known/smart-configuration.
+
+        Called as a fallback when the CapabilityStatement has no security block.
+        Some FHIR servers (e.g. Elevance Health) advertise OAuth via
+        .well-known but not in their CapabilityStatement.
+
+        :param state: A settings/state dictionary (must contain 'aud')
+        :returns: 'oauth2' if discovery succeeds, None otherwise
+
+        Note: This uses requests.get() directly rather than server.session
+        because no server instance is available at this point in the flow.
+        This means the request won't inherit proxy, cert bundle, or retry
+        config from the server session.
+        """
+        aud = state["aud"]
+        well_known_url = aud.rstrip("/") + "/.well-known/smart-configuration"
+
+        try:
+            resp = _requests_lib.get(
+                well_known_url,
+                headers={"Accept": "application/json"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            wk = resp.json()
+        except Exception as e:
+            logger.debug(f"SMART AUTH: .well-known discovery failed for {aud}: {e}")
+            return None
+
+        authorize_uri = wk.get("authorization_endpoint")
+        token_uri = wk.get("token_endpoint")
+
+        if authorize_uri and token_uri:
+            state["authorize_uri"] = authorize_uri
+            state["token_uri"] = token_uri
+            if "registration_endpoint" in wk:
+                state["registration_uri"] = wk["registration_endpoint"]
+            # Cache the full .well-known response so _authorize_params()
+            # can reuse it for PKCE discovery without a second fetch.
+            state["well_known_config"] = wk
+            logger.info(f"SMART AUTH: Discovered OAuth endpoints via .well-known for {aud}")
+            return "oauth2"
+
+        logger.debug(f"SMART AUTH: .well-known for {aud} missing authorize/token endpoints")
+        return None
 
     @classmethod
     def create(cls, auth_type, state=None):
@@ -179,6 +236,7 @@ class FHIROAuth2Auth(FHIRAuth):
 
         self.code_verifier = None
         self.code_challenge = None
+        self._well_known_config = None
 
         super(FHIROAuth2Auth, self).__init__(state=state)
 
@@ -259,21 +317,26 @@ class FHIROAuth2Auth(FHIRAuth):
         if server.launch_token is not None:
             params['launch'] = server.launch_token
 
-        try:
-            smart_configuration_url = self.aud
-            if self.aud.endswith('/'):
-                smart_configuration_url = self.aud[:-1]
+        # Use cached .well-known config from discovery if available,
+        # otherwise fetch it fresh.
+        if self._well_known_config is not None:
+            smart_configuration = self._well_known_config
+        else:
+            try:
+                smart_configuration_url = self.aud
+                if self.aud.endswith('/'):
+                    smart_configuration_url = self.aud[:-1]
 
-            smart_configuration_url += '/.well-known/smart-configuration'
-            response = server.request_data(smart_configuration_url)
+                smart_configuration_url += '/.well-known/smart-configuration'
+                response = server.request_data(smart_configuration_url)
 
-            smart_configuration = json.loads(response.decode('utf-8'))
-        except (ValueError, json.JSONDecodeError) as e:
-            logger.warning(f"Failed to parse SMART configuration: {e}")
-            smart_configuration = None
-        except Exception as e:
-            logger.warning(f"Failed to fetch SMART configuration: {e}")
-            smart_configuration = None
+                smart_configuration = json.loads(response.decode('utf-8'))
+            except (ValueError, json.JSONDecodeError) as e:
+                logger.warning(f"Failed to parse SMART configuration: {e}")
+                smart_configuration = None
+            except Exception as e:
+                logger.warning(f"Failed to fetch SMART configuration: {e}")
+                smart_configuration = None
 
         if self._supports_pkce_s256(smart_configuration):
             challenge = generate_pkce_challenge()
@@ -592,6 +655,12 @@ class FHIROAuth2Auth(FHIRAuth):
 
         self.code_verifier = state.get('code_verifier') or self.code_verifier
         self.code_challenge = state.get('code_challenge') or self.code_challenge
+        # _well_known_config is a transient in-memory cache populated at
+        # initial creation via from_capability_security(). It is intentionally
+        # NOT included in the state property (write side) so it won't be
+        # serialized/persisted. On deserialization it will be None, and
+        # _authorize_params() will fall back to fetching .well-known fresh.
+        self._well_known_config = state.get('well_known_config') or self._well_known_config
 
     # MARK: Utilities
 
