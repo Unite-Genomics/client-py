@@ -322,7 +322,8 @@ class FHIROAuth2Auth(FHIRAuth):
         if self._well_known_config is not None:
             logger.warning(
                 "SMART AUTH: CapabilityStatement for %s had no OAuth endpoints; "
-                "using cached .well-known/smart-configuration for PKCE discovery",
+                "using cached .well-known/smart-configuration for PKCE discovery "
+                "(fetched via direct HTTP GET, bypassing server session proxy/cert config)",
                 self.aud,
             )
             smart_configuration = self._well_known_config
