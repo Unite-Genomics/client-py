@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import urllib.parse as urlparse
 from urllib.parse import urlencode
 
-import requests as _requests_lib
+import requests
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives._serialization import Encoding, PublicFormat
 from jwt.algorithms import RSAAlgorithm
@@ -121,7 +121,7 @@ class FHIRAuth:
         well_known_url = aud.rstrip("/") + "/.well-known/smart-configuration"
 
         try:
-            resp = _requests_lib.get(
+            resp = requests.get(
                 well_known_url,
                 headers={"Accept": "application/json"},
                 timeout=10,
@@ -129,7 +129,7 @@ class FHIRAuth:
             resp.raise_for_status()
             wk = resp.json()
         except Exception as e:
-            logger.debug(f"SMART AUTH: .well-known discovery failed for {aud}: {e}")
+            logger.info(f"SMART AUTH: .well-known discovery failed for {aud}: {e}")
             return None
 
         authorize_uri = wk.get("authorization_endpoint")
