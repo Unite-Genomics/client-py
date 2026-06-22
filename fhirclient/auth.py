@@ -320,6 +320,11 @@ class FHIROAuth2Auth(FHIRAuth):
         # Use cached .well-known config from discovery if available,
         # otherwise fetch it fresh.
         if self._well_known_config is not None:
+            logger.warning(
+                "SMART AUTH: CapabilityStatement for %s had no OAuth endpoints; "
+                "using cached .well-known/smart-configuration for PKCE discovery",
+                self.aud,
+            )
             smart_configuration = self._well_known_config
         else:
             try:
