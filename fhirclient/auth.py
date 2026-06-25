@@ -38,13 +38,23 @@ class FHIRAuth:
                 f'Class {FHIRAuth.auth_classes[cls.auth_type]} is already registered for authorization type "{cls.auth_type}"'
             )
 
+    @staticmethod
+    def _well_known_url(aud):
+        """Build the .well-known/smart-configuration URL for a given aud.
+
+        :param str aud: The FHIR server base URL
+        :returns: The .well-known URL
+        """
+        return aud.rstrip("/") + "/.well-known/smart-configuration"
+
     @classmethod
-    def from_capability_security(cls, security, state=None):
+    def from_capability_security(cls, security, state=None, session=None):
         """Supply a capabilitystatement.rest.security statement and this
         method will figure out which type of security should be instantiated.
 
         :param security: A CapabilityStatementRestSecurity instance
         :param state: A settings/state dictionary
+        :param session: An optional requests.Session for HTTP calls
         :returns: A FHIRAuth instance or subclass thereof
         """
         auth_type = None
@@ -97,12 +107,12 @@ class FHIRAuth:
         # Some FHIR servers (e.g. Elevance Health) don't advertise OAuth in
         # their CapabilityStatement but do support it via .well-known.
         if auth_type is None and state and state.get("aud"):
-            auth_type = cls._try_well_known_discovery(state)
+            auth_type = cls._try_well_known_discovery(state, session=session)
 
         return cls.create(auth_type, state=state)
 
     @classmethod
-    def _try_well_known_discovery(cls, state):
+    def _try_well_known_discovery(cls, state, session=None):
         """Try to discover OAuth endpoints from .well-known/smart-configuration.
 
         Called as a fallback when the CapabilityStatement has no security block.
@@ -110,18 +120,17 @@ class FHIRAuth:
         .well-known but not in their CapabilityStatement.
 
         :param state: A settings/state dictionary (must contain 'aud')
+        :param session: An optional requests.Session to use for the HTTP call.
+            When provided, the request inherits the session's proxy, cert
+            bundle, and retry config.
         :returns: 'oauth2' if discovery succeeds, None otherwise
-
-        Note: This uses requests.get() directly rather than server.session
-        because no server instance is available at this point in the flow.
-        This means the request won't inherit proxy, cert bundle, or retry
-        config from the server session.
         """
         aud = state["aud"]
-        well_known_url = aud.rstrip("/") + "/.well-known/smart-configuration"
+        well_known_url = cls._well_known_url(aud)
+        http = session or requests
 
         try:
-            resp = requests.get(
+            resp = http.get(
                 well_known_url,
                 headers={"Accept": "application/json"},
                 timeout=10,
@@ -320,20 +329,15 @@ class FHIROAuth2Auth(FHIRAuth):
         # Use cached .well-known config from discovery if available,
         # otherwise fetch it fresh.
         if self._well_known_config is not None:
-            logger.warning(
-                "SMART AUTH: CapabilityStatement for %s had no OAuth endpoints; "
-                "using cached .well-known/smart-configuration for PKCE discovery "
-                "(fetched via direct HTTP GET, bypassing server session proxy/cert config)",
+            logger.info(
+                "SMART AUTH: Using cached .well-known/smart-configuration "
+                "for PKCE discovery for %s",
                 self.aud,
             )
             smart_configuration = self._well_known_config
         else:
             try:
-                smart_configuration_url = self.aud
-                if self.aud.endswith('/'):
-                    smart_configuration_url = self.aud[:-1]
-
-                smart_configuration_url += '/.well-known/smart-configuration'
+                smart_configuration_url = FHIRAuth._well_known_url(self.aud)
                 response = server.request_data(smart_configuration_url)
 
                 smart_configuration = json.loads(response.decode('utf-8'))

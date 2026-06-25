@@ -133,7 +133,7 @@ class FHIRServer(object):
                 else None,
                 "jwt_token": self.client.jwt_token if self.client is not None else None,
             }
-            self.auth = FHIRAuth.from_capability_security(security, settings)
+            self.auth = FHIRAuth.from_capability_security(security, settings, session=self.session)
             self.should_save_state()
 
     # MARK: Authorization
