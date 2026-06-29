@@ -1,0 +1,249 @@
+import json
+import unittest
+from unittest.mock import MagicMock, patch
+
+from fhirclient.auth import FHIRAuth, FHIROAuth2Auth
+
+
+class TestWellKnownDiscovery(unittest.TestCase):
+    """Tests for .well-known/smart-configuration fallback discovery."""
+
+    def _make_state(self, aud="https://fhir.example.com/api/v1/fhir"):
+        return {
+            "aud": aud,
+            "app_id": "test-client-id",
+            "app_secret": None,
+            "redirect_uri": "https://example.com/callback",
+            "jwt_token": None,
+
+        }
+
+    def _make_session(self, wk_response=None, side_effect=None):
+        session = MagicMock()
+        if side_effect:
+            session.get.side_effect = side_effect
+        else:
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = wk_response
+            mock_resp.raise_for_status = MagicMock()
+            session.get.return_value = mock_resp
+        return session
+
+    def _well_known_response(self, authorize=True, token=True, registration=False):
+        wk = {}
+        if authorize:
+            wk["authorization_endpoint"] = "https://fhir.example.com/oauth2/authorize"
+        if token:
+            wk["token_endpoint"] = "https://fhir.example.com/oauth2/token"
+        if registration:
+            wk["registration_endpoint"] = "https://fhir.example.com/oauth2/register"
+        wk["code_challenge_methods_supported"] = ["S256"]
+        return wk
+
+    def test_discovery_creates_oauth2_when_security_is_none(self):
+        """When CapabilityStatement has no security, .well-known should be tried
+        and FHIROAuth2Auth should be created."""
+        session = self._make_session(self._well_known_response())
+
+        state = self._make_state()
+        auth = FHIRAuth.from_capability_security(None, state, session=session)
+
+        self.assertIsInstance(auth, FHIROAuth2Auth)
+        self.assertEqual(state["authorize_uri"], "https://fhir.example.com/oauth2/authorize")
+        self.assertEqual(state["token_uri"], "https://fhir.example.com/oauth2/token")
+        session.get.assert_called_once()
+
+    def test_discovery_includes_registration_uri(self):
+        """registration_endpoint from .well-known should be stored in state."""
+        session = self._make_session(self._well_known_response(registration=True))
+
+        state = self._make_state()
+        auth = FHIRAuth.from_capability_security(None, state, session=session)
+
+        self.assertIsInstance(auth, FHIROAuth2Auth)
+        self.assertEqual(state["registration_uri"], "https://fhir.example.com/oauth2/register")
+
+    def test_discovery_falls_back_to_basic_on_network_error(self):
+        """Network errors should not raise — fall back to basic FHIRAuth."""
+        session = self._make_session(side_effect=Exception("Connection refused"))
+
+        state = self._make_state()
+        auth = FHIRAuth.from_capability_security(None, state, session=session)
+
+        self.assertNotIsInstance(auth, FHIROAuth2Auth)
+        self.assertEqual(auth.auth_type, "none")
+
+    def test_discovery_falls_back_when_missing_endpoints(self):
+        """If .well-known response lacks authorize or token, fall back."""
+        session = self._make_session(self._well_known_response(authorize=True, token=False))
+
+        state = self._make_state()
+        auth = FHIRAuth.from_capability_security(None, state, session=session)
+
+        self.assertNotIsInstance(auth, FHIROAuth2Auth)
+
+    def test_discovery_falls_back_on_http_error(self):
+        """HTTP 404 from .well-known should not raise — fall back."""
+        import requests
+
+        session = self._make_session(side_effect=requests.HTTPError("404 Not Found"))
+
+        state = self._make_state()
+        auth = FHIRAuth.from_capability_security(None, state, session=session)
+
+        self.assertNotIsInstance(auth, FHIROAuth2Auth)
+
+    def test_discovery_caches_well_known_config(self):
+        """The .well-known response should be cached in state for reuse."""
+        wk = self._well_known_response()
+        session = self._make_session(wk)
+
+        state = self._make_state()
+        FHIRAuth.from_capability_security(None, state, session=session)
+
+        self.assertEqual(state["well_known_config"], wk)
+
+    def test_discovery_not_called_when_security_has_oauth(self):
+        """When CapabilityStatement has OAuth extensions, .well-known should NOT be fetched."""
+        security = MagicMock()
+        ext_inner = MagicMock()
+        ext_inner.url = "token"
+        ext_inner.valueUri = "https://fhir.example.com/oauth2/token"
+        ext_inner2 = MagicMock()
+        ext_inner2.url = "authorize"
+        ext_inner2.valueUri = "https://fhir.example.com/oauth2/authorize"
+
+        ext = MagicMock()
+        ext.url = "http://fhir-registry.smarthealthit.org/StructureDefinition/oauth-uris"
+        ext.extension = [ext_inner, ext_inner2]
+        security.extension = [ext]
+
+        session = self._make_session(self._well_known_response())
+        state = self._make_state()
+        auth = FHIRAuth.from_capability_security(security, state, session=session)
+
+        self.assertIsInstance(auth, FHIROAuth2Auth)
+        session.get.assert_not_called()
+
+    def test_discovery_skipped_when_no_aud(self):
+        """If state has no aud, .well-known should not be attempted."""
+        state = {"app_id": "test", "well_known_fallback": True}
+        auth = FHIRAuth.from_capability_security(None, state)
+
+        self.assertNotIsInstance(auth, FHIROAuth2Auth)
+
+    def test_discovery_strips_trailing_slash_from_aud(self):
+        """Trailing slash on aud should not produce double-slash in .well-known URL."""
+        session = self._make_session(self._well_known_response())
+
+        state = self._make_state(aud="https://fhir.example.com/api/v1/fhir/")
+        FHIRAuth.from_capability_security(None, state, session=session)
+
+        called_url = session.get.call_args[0][0]
+        self.assertEqual(
+            called_url,
+            "https://fhir.example.com/api/v1/fhir/.well-known/smart-configuration",
+        )
+        self.assertNotIn("//.", called_url)
+
+    def test_discovery_uses_session_for_http_call(self):
+        """Discovery should use the provided session, not bare requests."""
+        session = self._make_session(self._well_known_response())
+
+        state = self._make_state()
+        FHIRAuth.from_capability_security(None, state, session=session)
+
+        session.get.assert_called_once()
+
+
+class TestWellKnownUrl(unittest.TestCase):
+    """Tests for the _well_known_url helper."""
+
+    def test_builds_url_without_trailing_slash(self):
+        url = FHIRAuth._well_known_url("https://fhir.example.com/api")
+        self.assertEqual(url, "https://fhir.example.com/api/.well-known/smart-configuration")
+
+    def test_strips_trailing_slash(self):
+        url = FHIRAuth._well_known_url("https://fhir.example.com/api/")
+        self.assertEqual(url, "https://fhir.example.com/api/.well-known/smart-configuration")
+
+    def test_strips_multiple_trailing_slashes(self):
+        url = FHIRAuth._well_known_url("https://fhir.example.com/api///")
+        self.assertEqual(url, "https://fhir.example.com/api/.well-known/smart-configuration")
+
+
+class TestWellKnownCacheInAuthorizeParams(unittest.TestCase):
+    """Tests that cached .well-known config is reused in _authorize_params."""
+
+    def test_cached_config_prevents_second_fetch(self):
+        """When _well_known_config is set, _authorize_params should not re-fetch."""
+        wk = {
+            "authorization_endpoint": "https://fhir.example.com/oauth2/authorize",
+            "token_endpoint": "https://fhir.example.com/oauth2/token",
+            "code_challenge_methods_supported": ["S256"],
+        }
+        session = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = wk
+        mock_resp.raise_for_status = MagicMock()
+        session.get.return_value = mock_resp
+
+        state = self._make_state()
+        auth = FHIRAuth.from_capability_security(None, state, session=session)
+
+        # Reset mock to track only _authorize_params calls
+        session.get.reset_mock()
+
+        server = MagicMock()
+        server.desired_scope = "patient/*.read"
+        server.launch_token = None
+
+        auth._authorize_params(server)
+
+        # .well-known should NOT have been fetched again
+        session.get.assert_not_called()
+        server.request_data.assert_not_called()
+
+    def _make_state(self, aud="https://fhir.example.com/api/v1/fhir"):
+        return {
+            "aud": aud,
+            "app_id": "test-client-id",
+            "app_secret": None,
+            "redirect_uri": "https://example.com/callback",
+            "jwt_token": None,
+
+        }
+
+
+class TestWellKnownCacheNotSerialized(unittest.TestCase):
+    """Test that well_known_config is excluded from serialized state."""
+
+    def test_well_known_config_not_in_state_property(self):
+        """well_known_config should not appear in auth.state (write side)."""
+        wk = {
+            "authorization_endpoint": "https://fhir.example.com/oauth2/authorize",
+            "token_endpoint": "https://fhir.example.com/oauth2/token",
+            "code_challenge_methods_supported": ["S256"],
+        }
+        session = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = wk
+        mock_resp.raise_for_status = MagicMock()
+        session.get.return_value = mock_resp
+
+        state = {
+            "aud": "https://fhir.example.com/api/v1/fhir",
+            "app_id": "test-client-id",
+            "app_secret": None,
+            "redirect_uri": "https://example.com/callback",
+            "jwt_token": None,
+
+        }
+        auth = FHIRAuth.from_capability_security(None, state, session=session)
+
+        self.assertIsInstance(auth, FHIROAuth2Auth)
+        self.assertNotIn("well_known_config", auth.state)
+
+
+if __name__ == "__main__":
+    unittest.main()

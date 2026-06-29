@@ -1,7 +1,7 @@
 import logging
 from .server import FHIRServer, FHIRUnauthorizedException, FHIRNotFoundException
 
-__version__ = "4.4.0+unite.2"  # Update docs/Doxyfile too when you bump this
+__version__ = "4.4.0+unite.3"  # Update docs/Doxyfile too when you bump this
 __author__ = "SMART Platforms Team"
 __license__ = "APACHE2"
 __copyright__ = "Copyright 2017 Boston Children's Hospital"
@@ -28,6 +28,7 @@ class FHIRClient:
         - `launch_token`: The launch token
         - `capability_callback`: Callable(base_uri) -> CapabilityStatement or None, for external caching
         - `on_capability_fetched`: Callable(base_uri, CapabilityStatement) -> None, called after network fetch
+
     """
     def __init__(self, settings=None, state=None, save_func=lambda x: x, load_func=lambda x: None):
         self.app_id = None
